@@ -16,25 +16,34 @@ using Mockups.Tests.TestSupport;
 
 namespace Mockups.Tests;
 
-public class OrdersServiceTests
+public class OrdersServiceTests : IAsyncLifetime
 {
+    private SqliteDbFixture _fx = default!;
+
+    public Task InitializeAsync()
+    {
+        _fx = new SqliteDbFixture();
+        return Task.CompletedTask;
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _fx.DisposeAsync();
+    }
+
     [Fact]
     public async Task CreateOrder_PersistsOrderAndItems_AndClearsCart()
     {
-        var (conn, db) = SqliteTestDb.Create();
-        await using var _ = db;
-        await using var __ = conn;
+        var db = _fx.Db;
 
         var userId = Guid.NewGuid();
+        await TestDataSeeder.AddUserAsync(db, userId);
+
         var item1 = Guid.NewGuid();
         var item2 = Guid.NewGuid();
 
-        // FK-friendly seed
-        db.MenuItems.AddRange(
-            new MenuItem { Id = item1, Name = "A", Description = "d", Price = 100, Category = MenuItemCategory.Pizza, IsVegan = false, PhotoPath = "" },
-            new MenuItem { Id = item2, Name = "B", Description = "d", Price = 200, Category = MenuItemCategory.Soup, IsVegan = true, PhotoPath = "" }
-        );
-        await db.SaveChangesAsync();
+        await TestDataSeeder.AddMenuItemAsync(db, item1, "A", 100, MenuItemCategory.Pizza, isVegan: false);
+        await TestDataSeeder.AddMenuItemAsync(db, item2, "B", 200, MenuItemCategory.Soup, isVegan: true);
 
         var carts = new Mock<ICartsService>();
         carts.Setup(x => x.GetUsersCart(userId, It.IsAny<bool>()))
@@ -91,15 +100,13 @@ public class OrdersServiceTests
     [Fact]
     public async Task CreateOrder_AppliesLunchDiscount_WhenLunchTime()
     {
-        var (conn, db) = SqliteTestDb.Create();
-        await using var _ = db;
-        await using var __ = conn;
+        var db = _fx.Db;
 
         var userId = Guid.NewGuid();
-        var itemId = Guid.NewGuid();
+        await TestDataSeeder.AddUserAsync(db, userId);
 
-        db.MenuItems.Add(new MenuItem { Id = itemId, Name = "A", Description = "d", Price = 100, Category = MenuItemCategory.Pizza, IsVegan = false, PhotoPath = "" });
-        await db.SaveChangesAsync();
+        var itemId = Guid.NewGuid();
+        await TestDataSeeder.AddMenuItemAsync(db, itemId, "A", 100, MenuItemCategory.Pizza, isVegan: false);
 
         var carts = new Mock<ICartsService>();
         carts.Setup(x => x.GetUsersCart(userId, It.IsAny<bool>()))
@@ -132,15 +139,13 @@ public class OrdersServiceTests
     [Fact]
     public async Task CreateOrder_BirthdayDiscount_TakesPrecedenceOverLunch()
     {
-        var (conn, db) = SqliteTestDb.Create();
-        await using var _ = db;
-        await using var __ = conn;
+        var db = _fx.Db;
 
         var userId = Guid.NewGuid();
-        var itemId = Guid.NewGuid();
+        await TestDataSeeder.AddUserAsync(db, userId);
 
-        db.MenuItems.Add(new MenuItem { Id = itemId, Name = "A", Description = "d", Price = 100, Category = MenuItemCategory.Pizza, IsVegan = false, PhotoPath = "" });
-        await db.SaveChangesAsync();
+        var itemId = Guid.NewGuid();
+        await TestDataSeeder.AddMenuItemAsync(db, itemId, "A", 100, MenuItemCategory.Pizza, isVegan: false);
 
         var carts = new Mock<ICartsService>();
         carts.Setup(x => x.GetUsersCart(userId, It.IsAny<bool>()))
