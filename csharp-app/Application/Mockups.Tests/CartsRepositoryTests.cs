@@ -64,7 +64,7 @@ public class CartsRepositoryTests
     }
 
     [Fact]
-    public void GetCartItemCount_ReturnsTotalAmount()
+    public void GetCartItemCount_ReturnsDistinctItemsCount()
     {
         var repo = new CartsRepository();
         var userId = Guid.NewGuid();
@@ -74,7 +74,7 @@ public class CartsRepositoryTests
 
         var count = repo.GetCartItemCount(userId);
 
-        Assert.Equal(6, count);
+        Assert.Equal(2, count);
     }
 
     [Fact]
