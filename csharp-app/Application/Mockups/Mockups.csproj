@@ -21,4 +21,9 @@
     <Folder Include="wwwroot\files\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <_ContentIncludedByDefault Remove="Mockups.Tests\obj\Mockups.Tests.csproj.nuget.dgspec.json" />
+    <_ContentIncludedByDefault Remove="Mockups.Tests\obj\project.assets.json" />
+  </ItemGroup>
+
 </Project>
