@@ -33,8 +33,9 @@ namespace Mockups.Services.MenuItems
             var fileNameWithPath = string.Empty;
             if (isFileAttached)
             {
-#pragma warning disable CS8602 // Dereference of a possibly null reference.
-                var extension = Path.GetExtension(model.File.FileName).Replace(".", "");
+                var extension = Path.GetExtension(model.File.FileName)
+                    .TrimStart('.')
+                    .ToLowerInvariant();
 #pragma warning restore CS8602 // Dereference of a possibly null reference.
                 if (!AllowedExtensions.Contains(extension))
                 {
