@@ -6,9 +6,9 @@ using Mockups.Services.Users;
 using Mockups.Storage;
 using Mockups.Configs;
 using Mockups.Services.MenuItems;
-using System.Globalization;
 using Mockups.Models.OrdersManagement;
 using Mockups.Models.Cart;
+using Mockups.Services.Time;
 
 namespace Mockups.Services.Orders
 {
@@ -20,8 +20,11 @@ namespace Mockups.Services.Orders
         private readonly IAddressesService _addressesService;
         private readonly OrderConfig _orderTimeParams;
         private readonly IMenuItemsService _menuItemsService;
+        private readonly IDateTimeProvider _time;
 
-        public OrdersService(OrdersRepository ordersRepository, ICartsService cartsService, IUsersService usersService, IAddressesService addressesService, OrderConfig orderTimeParams, IMenuItemsService menuItemsService)
+        public OrdersService(OrdersRepository ordersRepository, ICartsService cartsService, IUsersService usersService,
+            IAddressesService addressesService, OrderConfig orderTimeParams, IMenuItemsService menuItemsService,
+            IDateTimeProvider time)
         {
             _ordersRepository = ordersRepository;
             _cartsService = cartsService;
@@ -29,11 +32,12 @@ namespace Mockups.Services.Orders
             _addressesService = addressesService;
             _orderTimeParams = orderTimeParams;
             _menuItemsService = menuItemsService;
+            _time = time;
         }
 
         public async Task CreateOrder(OrderCreatePostViewModel model, Guid userId)
         {
-            var orderTime = DateTime.Now;
+            var orderTime = _time.Now;
 
             var cartItems = (await _cartsService.GetUsersCart(userId)).Items;
             var price = 0f;
@@ -43,23 +47,10 @@ namespace Mockups.Services.Orders
                 price += itemPrice;
             }
 
-            var discount = 0f;
-            var discountDescription = "";
-
             var userDOB = (await _usersService.GetUserInfo(userId)).BirthDate;
-            var now = DateTime.Now;
-            userDOB.AddYears(now.Year - userDOB.Year);
-            if (Math.Abs((now - userDOB).Days) <= 3)//compare dates
-            {
-                discount = 15f;
-                discountDescription = "На ваш заказ предоставляется скидка 15% в честь дня рождения!";
-            }
-            else if (now.Hour >= 11 && now.Hour < 15)//order time
-            {
-                discount = 10f;
-                discountDescription = "На ваш заказ предоставляется скидка на ланч в 10%";
-            }
+            var now = _time.Now;
 
+            var (discount, _) = CalculateDiscount(now, userDOB);
 
             var order = new Order
             {
@@ -114,7 +105,8 @@ namespace Mockups.Services.Orders
             {
                 var orderDate = order.CreationTime.ToString("MM.dd.yyyy HH:mm");
                 var orderStatus = order.Status.GetDisplayName();
-                var orderInfo = (order.Status == OrderStatus.Delivered ? "Заказ доставлен " : "Заказ ожидается ") + order.DeliveryTime.ToString("MM.dd.yyyy HH:mm");
+                var orderInfo = (order.Status == OrderStatus.Delivered ? "Заказ доставлен " : "Заказ ожидается ") +
+                                order.DeliveryTime.ToString("MM.dd.yyyy HH:mm");
                 var orderItems = await _ordersRepository.GetOrdersItems(order.Id);
                 var orderContents = string.Join(", ", orderItems.Select(x => x.Item.Name).ToList());
 
@@ -154,7 +146,8 @@ namespace Mockups.Services.Orders
             var deliveryTimes = new List<DateTime>();
             for (int i = 0; i < 5; i++)
             {
-                var time = DateTime.Now.AddMinutes(_orderTimeParams.MinDeliveryTime).AddMinutes(i * _orderTimeParams.DeliveryTimeStep);
+                var time = _time.Now.AddMinutes(_orderTimeParams.MinDeliveryTime)
+                    .AddMinutes(i * _orderTimeParams.DeliveryTimeStep);
                 deliveryTimes.Add(time);
             }
 
@@ -164,23 +157,13 @@ namespace Mockups.Services.Orders
                 var itemPrice = (await _menuItemsService.GetItemModelById(item.Id.ToString())).Price * item.Amount;
                 price += itemPrice;
             }
-
-            var discount = 0f;
-            var discountDescription = "";
-
+            
             var userDOB = (await _usersService.GetUserInfo(userId)).BirthDate;
-            var now = DateTime.Now;
-            userDOB = userDOB.AddYears(now.Year - userDOB.Year).AddHours(now.Hour).AddMinutes(now.Minute).AddSeconds(now.Second + 1);
-            if (Math.Abs((now - userDOB).Days) <= 3)//compare dates
-            {
-                discount = 15f;
-                discountDescription = "На ваш заказ предоставляется скидка 15% в честь дня рождения!";
-            }
-            else if (now.Hour >= 11 && now.Hour < 15)//order time
-            {
-                discount = 10f;
-                discountDescription = "На ваш заказ предоставляется скидка на ланч в 10%";
-            }
+            var now = _time.Now;
+            userDOB = userDOB.AddYears(now.Year - userDOB.Year).AddHours(now.Hour).AddMinutes(now.Minute)
+                .AddSeconds(now.Second + 1);
+            
+            var (discount, discountDescription) = CalculateDiscount(now, userDOB);
 
             return new OrderCreateWrapperViewModel
             {
@@ -248,7 +231,8 @@ namespace Mockups.Services.Orders
                 Id = order.Id,
                 CreationTime = order.CreationTime.ToString("MM.dd.yyyy HH:mm"),
                 Status = order.Status.GetDisplayName(),
-                StatusInfo = (order.Status == OrderStatus.Delivered ? "Заказ доставлен " : "Заказ ожидается ") + order.DeliveryTime.ToString("MM.dd.yyyy HH:mm"),
+                StatusInfo = (order.Status == OrderStatus.Delivered ? "Заказ доставлен " : "Заказ ожидается ") +
+                             order.DeliveryTime.ToString("MM.dd.yyyy HH:mm"),
                 TotalCost = order.Cost * (100 - order.Discount) / 100,
                 Address = order.Address,
                 Items = contents
@@ -264,7 +248,8 @@ namespace Mockups.Services.Orders
             {
                 var orderDate = order.CreationTime.ToString("MM.dd.yyyy HH:mm");
                 var orderStatus = order.Status.GetDisplayName();
-                var orderInfo = (order.Status == OrderStatus.Delivered ? "Заказ доставлен " : "Заказ ожидается ") + order.DeliveryTime.ToString("MM.dd.yyyy HH:mm");
+                var orderInfo = (order.Status == OrderStatus.Delivered ? "Заказ доставлен " : "Заказ ожидается ") +
+                                order.DeliveryTime.ToString("MM.dd.yyyy HH:mm");
                 var orderItems = await _ordersRepository.GetOrdersItems(order.Id);
                 var orderContents = string.Join(", ", orderItems.Select(x => x.Item.Name).ToList());
 
@@ -288,9 +273,24 @@ namespace Mockups.Services.Orders
 
             return indexVM;
         }
+        
+        private static (float Discount, string Description) CalculateDiscount(DateTime now, DateTime birthDate)
+        {
+            var birthdayThisYear = birthDate
+                .AddYears(now.Year - birthDate.Year)
+                .AddHours(now.Hour)
+                .AddMinutes(now.Minute)
+                .AddSeconds(now.Second);
+
+            if (Math.Abs((now - birthdayThisYear).Days) <= 3)
+                return (15f, "На ваш заказ предоставляется скидка 15% в честь дня рождения!");
+
+            if (now.Hour >= 11 && now.Hour < 15)
+                return (10f, "На ваш заказ предоставляется скидка на ланч в 10%");
+
+            return (0f, "");
+        }
     }
-
-
 
 
     public class OrderComparer : IComparer<Order>
@@ -314,6 +314,7 @@ namespace Mockups.Services.Orders
             {
                 return -1;
             }
+
             if (y.Status == OrderStatus.New && x.Status != OrderStatus.New)
             {
                 return 1;
