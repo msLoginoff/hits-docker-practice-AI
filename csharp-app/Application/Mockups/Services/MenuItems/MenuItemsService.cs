@@ -66,11 +66,11 @@ namespace Mockups.Services.MenuItems
 
             var items = new List<MenuItem>();
 
-            if (isVegan != null && category.Any())
+            if (isVegan != null && category.Any() == true)
             {
                 items = await _menuItemRepository.GetAllMenuItems((bool)isVegan, category);
             }
-            else if (category.Any())
+            else if (category?.Any() == true)
             {
                 items = await _menuItemRepository.GetAllMenuItems(category);
             }
