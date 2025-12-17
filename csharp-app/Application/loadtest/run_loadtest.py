@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import os
 import platform
+import re
 import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List
@@ -23,11 +22,84 @@ def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
-def docker_k6_run(script_name: str, base_url: str, scripts_dir: Path, out_dir: Path,
+def try_cmd(cmd: List[str]) -> Optional[str]:
+    code, out = run_cmd(cmd)
+    return out.strip() if code == 0 else None
+
+
+def parse_duration_to_seconds(s: str) -> int:
+    # "15s" / "2m" / "1h"
+    m = re.match(r"^\s*(\d+)\s*([smh])\s*$", s)
+    if not m:
+        return 0
+    n = int(m.group(1))
+    unit = m.group(2)
+    if unit == "s":
+        return n
+    if unit == "m":
+        return n * 60
+    if unit == "h":
+        return n * 3600
+    return 0
+
+
+def parse_k6_stages(js_path: Path) -> Dict[str, Any]:
+    """
+    Очень простая эвристика: ищем duration:".." и target: N
+    Работает для наших скриптов (stages: [{duration:"..", target:..}, ...])
+    """
+    txt = js_path.read_text(encoding="utf-8", errors="ignore")
+
+    durations = re.findall(r'duration\s*:\s*["\']([^"\']+)["\']', txt)
+    targets = re.findall(r'target\s*:\s*(\d+)', txt)
+
+    total_sec = sum(parse_duration_to_seconds(d) for d in durations)
+    max_vu = max([int(x) for x in targets], default=0)
+
+    return {
+        "stages": [{"duration": d} for d in durations],
+        "duration_seconds": total_sec,
+        "duration_human": f"{total_sec // 60}m{total_sec % 60:02d}s" if total_sec else "unknown",
+        "max_vus": max_vu,
+    }
+
+
+def detect_db_container() -> str:
+    """
+    Сначала ищем по имени hits-sql,
+    если не нашли — по образу mssql.
+    """
+    fmt = "{{.Names}}|{{.Image}}|{{.ID}}"
+    out = try_cmd(["docker", "ps", "--format", fmt])
+    if not out:
+        return "not detected (docker ps unavailable)"
+
+    lines = [l.strip() for l in out.splitlines() if l.strip()]
+    # 1) по имени hits-sql (contains)
+    for l in lines:
+        name, image, cid = l.split("|", 2)
+        if "hits-sql" in name:
+            return f"detected by name: {name} ({image}, {cid[:12]})"
+
+    # 2) по образу mssql
+    for l in lines:
+        name, image, cid = l.split("|", 2)
+        if "mssql" in image.lower():
+            return f"detected by image: {name} ({image}, {cid[:12]})"
+
+    return "not detected"
+
+
+def docker_k6_version() -> str:
+    out = try_cmd(["docker", "run", "--rm", "grafana/k6", "version"])
+    return out or "unknown"
+
+
+def docker_k6_run(script_base: str, base_url: str, scripts_dir: Path, out_dir: Path,
                   extra_env: Dict[str, str]) -> Tuple[Path, Path]:
     ts = now_ts()
-    summary_path = out_dir / f"{script_name}_{ts}.json"
-    log_path = out_dir / f"{script_name}_{ts}.log"
+    summary_path = out_dir / f"{script_base}_{ts}.json"
+    log_path = out_dir / f"{script_base}_{ts}.log"
 
     env_args = []
     for k, v in extra_env.items():
@@ -40,7 +112,7 @@ def docker_k6_run(script_name: str, base_url: str, scripts_dir: Path, out_dir: P
         "-v", f"{scripts_dir}:/scripts",
         "grafana/k6", "run",
         f"--summary-export=/scripts/out/{summary_path.name}",
-        f"/scripts/{script_name}.js",
+        f"/scripts/{script_base}.js",
     ]
 
     code, out = run_cmd(cmd)
@@ -48,7 +120,7 @@ def docker_k6_run(script_name: str, base_url: str, scripts_dir: Path, out_dir: P
 
     if code != 0:
         print(out)
-        raise SystemExit(f"k6 failed for {script_name}. See log: {log_path}")
+        raise SystemExit(f"k6 failed for {script_base}. See log: {log_path}")
 
     if not summary_path.exists():
         raise SystemExit(f"Expected summary json not found: {summary_path}")
@@ -56,24 +128,13 @@ def docker_k6_run(script_name: str, base_url: str, scripts_dir: Path, out_dir: P
     return summary_path, log_path
 
 
-def get_metric(m: Dict[str, Any], name: str) -> Optional[Dict[str, Any]]:
-    return m.get(name)
-
-
-def ms(v: Optional[float]) -> Optional[float]:
-    return None if v is None else float(v)
-
-
-def pct(v: Optional[float]) -> Optional[float]:
-    return None if v is None else float(v) * 100.0
-
-
 def extract_core(summary: Dict[str, Any]) -> Dict[str, Any]:
     metrics = summary.get("metrics", {})
-    http_reqs = get_metric(metrics, "http_reqs") or {}
-    dur = get_metric(metrics, "http_req_duration") or {}
-    failed = get_metric(metrics, "http_req_failed") or {}
-    iters = get_metric(metrics, "iterations") or {}
+
+    http_reqs = metrics.get("http_reqs", {}) or {}
+    dur = metrics.get("http_req_duration", {}) or {}
+    failed = metrics.get("http_req_failed", {}) or {}
+    iters = metrics.get("iterations", {}) or {}
 
     return {
         "requests_count": http_reqs.get("count"),
@@ -86,6 +147,17 @@ def extract_core(summary: Dict[str, Any]) -> Dict[str, Any]:
         "iterations_count": iters.get("count"),
         "iterations_rate": iters.get("rate"),
     }
+
+
+def pct(v: Optional[float]) -> Optional[float]:
+    return None if v is None else float(v) * 100.0
+
+
+def safe_float(x: Any) -> Optional[float]:
+    try:
+        return None if x is None else float(x)
+    except Exception:
+        return None
 
 
 def grade_latency(p95_ms: float) -> str:
@@ -106,19 +178,13 @@ def grade_errors(err_rate: float) -> str:
     return "Плохо (>=1%)"
 
 
-def safe_float(x: Any) -> Optional[float]:
-    try:
-        return None if x is None else float(x)
-    except Exception:
-        return None
-
-
 def html_escape(s: str) -> str:
     return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace('"', "&quot;").replace("'", "&#39;"))
 
 
-def make_html_report(report_path: Path, meta: Dict[str, Any], results: Dict[str, Dict[str, Any]]) -> None:
+def make_html_report(report_path: Path, env_lines: List[str], notes: str,
+                     results: Dict[str, Dict[str, Any]]) -> None:
     rows = []
     for name, r in results.items():
         rps = safe_float(r.get("rps"))
@@ -143,8 +209,7 @@ def make_html_report(report_path: Path, meta: Dict[str, Any], results: Dict[str,
           </tr>
         """)
 
-    notes = meta.get("notes", "")
-    env_lines = "<br/>".join(html_escape(x) for x in meta.get("env_lines", []))
+    env_block = "<br/>".join(html_escape(x) for x in env_lines)
 
     html = f"""<!doctype html>
 <html lang="ru">
@@ -167,7 +232,7 @@ def make_html_report(report_path: Path, meta: Dict[str, Any], results: Dict[str,
 
   <div class="card">
     <h2>Окружение</h2>
-    <div class="muted">{env_lines}</div>
+    <div class="muted">{env_block}</div>
     <p class="muted" style="margin-top:10px;">{html_escape(notes)}</p>
   </div>
 
@@ -193,16 +258,16 @@ def make_html_report(report_path: Path, meta: Dict[str, Any], results: Dict[str,
   <div class="card">
     <h2>Авто-вывод</h2>
     <ul>
-      <li>RPS — это пропускная способность (сколько запросов/сек реально обработано).</li>
-      <li>Latency p95 — ключевая метрика “хвостов”: 95% запросов быстрее этого значения.</li>
-      <li>Error rate — доля запросов, которые не прошли проверки/вернули ошибки.</li>
-      <li>Сценарии с логином почти всегда дают меньший RPS, потому что там больше действий и обычно есть паузы (sleep), как у реального пользователя.</li>
+      <li>RPS — пропускная способность (сколько запросов/сек реально обработано).</li>
+      <li>Latency p95 — “хвост”: 95% запросов быстрее этого значения.</li>
+      <li>Error rate — доля запросов с ошибками/не прошедших checks.</li>
+      <li>Сценарии с логином обычно дают меньший RPS, потому что там больше шагов и “пользовательские паузы”.</li>
     </ul>
   </div>
 
   <div class="card">
-    <h2>Файлы</h2>
-    <p class="muted">Исходные JSON summary и лог stdout лежат рядом в папке <code>loadtest/out</code>.</p>
+    <h2>Артефакты</h2>
+    <p class="muted">JSON summary и stdout-логи лежат в <code>loadtest/out</code>.</p>
   </div>
 </body>
 </html>
@@ -212,75 +277,94 @@ def make_html_report(report_path: Path, meta: Dict[str, Any], results: Dict[str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run k6 load tests via Docker and generate JSON + HTML reports.",
+        description="Run k6 load tests via Docker and generate JSON + HTML + meta.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    parser.add_argument("--scenario", choices=["browse", "auth", "both"], default="both",
-                        help="Which scenario(s) to run.")
-    parser.add_argument("--base-url", default="https://host.docker.internal:7146",
-                        help="Base URL of the app as seen from Docker container.")
-    parser.add_argument("--email", default="Java@DlyaLox.ov", help="Login email for auth scenario.")
-    parser.add_argument("--password", default=".NetDlyaPacan0v", help="Login password for auth scenario.")
-    parser.add_argument("--out-dir", default="loadtest/out", help="Output directory (json/log/html).")
-    parser.add_argument("--html", action="store_true", help="Generate HTML report.")
-    parser.add_argument("--notes", default="App запущен локально (dotnet run). DB: SQL Server в Docker. Load tool: k6 в Docker.",
-                        help="Free-form notes to embed into report.")
-    parser.add_argument("--env", action="append", default=[],
-                        help="Extra environment lines (repeatable), e.g. --env 'dotnet: 6.0'")
-
+    parser.add_argument("--scenario", choices=["browse", "auth", "both"], default="both")
+    parser.add_argument("--base-url", default="https://host.docker.internal:7146")
+    parser.add_argument("--email", default="Java@DlyaLox.ov")
+    parser.add_argument("--password", default=".NetDlyaPacan0v")
+    parser.add_argument("--out-dir", default="loadtest/out")
+    parser.add_argument("--html", action="store_true")
+    parser.add_argument("--notes", default="App: dotnet run (macOS). DB: SQL Server in Docker. Load tool: k6 in Docker.")
     args = parser.parse_args()
 
-    project_root = Path.cwd()
-    scripts_dir = (project_root / "loadtest").resolve()
-    out_dir = (project_root / args.out_dir).resolve()
+    root = Path.cwd()
+    loadtest_dir = (root / "loadtest").resolve()
+    out_dir = (root / args.out_dir).resolve()
     ensure_dir(out_dir)
+    ensure_dir(loadtest_dir / "out")  # must exist for docker volume write
 
-    # k6 reads scripts from /scripts; we also want to write summary into /scripts/out
-    ensure_dir(scripts_dir / "out")
+    # Auto env collection
+    docker_ver = (try_cmd(["docker", "--version"]) or "unknown").strip()
+    dotnet_ver = (try_cmd(["dotnet", "--version"]) or "unknown").strip()
+    k6_ver = docker_k6_version()
+    db_info = detect_db_container()
 
-    # Meta environment lines
     env_lines = [
-        f"Дата/время: {datetime.now().isoformat(timespec='seconds')}",
+        f"Timestamp: {datetime.now().isoformat(timespec='seconds')}",
         f"BASE_URL: {args.base_url}",
-        f"OS: {platform.platform()}",
-        f"Python: {platform.python_version()}",
-        "k6: grafana/k6 (Docker)",
-        *args.env,
+        f"OS: {platform.platform()} ({platform.machine()})",
+        f".NET: {dotnet_ver}",
+        f"Docker: {docker_ver}",
+        f"k6: {k6_ver}",
+        f"DB container: {db_info}",
     ]
 
-    results = {}
+    # parse scenario durations from JS files
+    browse_meta = parse_k6_stages(loadtest_dir / "k6_menu_browse.js")
+    auth_meta = parse_k6_stages(loadtest_dir / "k6_auth_flow.js")
+
+    results: Dict[str, Dict[str, Any]] = {}
+    produced: Dict[str, Any] = {"browse": None, "auth": None}
 
     if args.scenario in ("browse", "both"):
         summary, log = docker_k6_run(
-            script_name="k6_menu_browse",
+            script_base="k6_menu_browse",
             base_url=args.base_url,
-            scripts_dir=scripts_dir,
+            scripts_dir=loadtest_dir,
             out_dir=out_dir,
             extra_env={}
         )
         data = json.loads(summary.read_text(encoding="utf-8"))
         results["Browse (anonymous menu)"] = extract_core(data)
-        print(f"[OK] Browse сценарий: {summary.name} / {log.name}")
+        produced["browse"] = {"summary": summary.name, "log": log.name, "script": "k6_menu_browse.js", "script_meta": browse_meta}
+        print(f"[OK] Browse: {summary.name} / {log.name}")
 
     if args.scenario in ("auth", "both"):
         summary, log = docker_k6_run(
-            script_name="k6_auth_flow",
+            script_base="k6_auth_flow",
             base_url=args.base_url,
-            scripts_dir=scripts_dir,
+            scripts_dir=loadtest_dir,
             out_dir=out_dir,
             extra_env={"EMAIL": args.email, "PASSWORD": args.password}
         )
         data = json.loads(summary.read_text(encoding="utf-8"))
         results["Auth flow (login→account→logout)"] = extract_core(data)
-        print(f"[OK] Auth сценарий: {summary.name} / {log.name}")
+        produced["auth"] = {"summary": summary.name, "log": log.name, "script": "k6_auth_flow.js", "script_meta": auth_meta}
+        print(f"[OK] Auth: {summary.name} / {log.name}")
+
+    # write meta file for "latest report" discovery
+    meta_ts = now_ts()
+    meta_path = out_dir / f"runmeta_{meta_ts}.json"
+    meta = {
+        "timestamp": meta_ts,
+        "base_url": args.base_url,
+        "env_lines": env_lines,
+        "notes": args.notes,
+        "produced": produced,
+        "results": results,
+    }
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[OK] Meta: {meta_path.name}")
 
     if args.html:
-        report_path = out_dir / f"report_{now_ts()}.html"
-        make_html_report(report_path, meta={"env_lines": env_lines, "notes": args.notes}, results=results)
-        print(f"[OK] HTML report generated: {report_path}")
+        html_path = out_dir / f"report_{meta_ts}.html"
+        make_html_report(html_path, env_lines=env_lines, notes=args.notes, results=results)
+        print(f"[OK] HTML: {html_path.name}")
 
-    # Print a small console summary too
+    # console summary
     print("\n=== Summary ===")
     for name, r in results.items():
         rps = safe_float(r.get("rps"))
