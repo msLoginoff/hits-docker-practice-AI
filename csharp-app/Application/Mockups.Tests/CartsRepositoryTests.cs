@@ -148,4 +148,27 @@ public class CartsRepositoryTests
         Assert.True(after > before);
         Assert.True(after > DateTime.Now);
     }
+    
+    [Fact]
+    public void DeleteItemFromCart_DoesNothing_WhenItemNotInCart()
+    {
+        var repo = new CartsRepository();
+        var userId = Guid.NewGuid();
+
+        repo.AddItemToCart(userId, new CartMenuItem { MenuItemId = Guid.NewGuid(), Amount = 1 });
+
+        // удаляем несуществующий id
+        repo.DeleteItemFromCart(userId, Guid.NewGuid());
+
+        var cart = repo.GetUsersCart(userId);
+        Assert.Single(cart.Items);
+    }
+
+    [Fact]
+    public void GetInactiveCarts_ReturnsEmpty_WhenNoCarts()
+    {
+        var repo = new CartsRepository();
+        var inactive = repo.GetInactiveCarts(inactiveTime: 10);
+        Assert.Empty(inactive);
+    }
 }

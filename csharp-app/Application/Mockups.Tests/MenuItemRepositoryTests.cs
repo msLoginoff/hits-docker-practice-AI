@@ -97,4 +97,28 @@ public class MenuItemRepositoryTests
         Assert.Single(res);
         Assert.Equal("VeganPizza", res[0].Name);
     }
+    
+    [Fact]
+    public async Task GetItemByName_ReturnsNull_WhenDeleted()
+    {
+        await using var ctx = CreateContext();
+        var repo = new MenuItemRepository(ctx);
+
+        var item = new MenuItem
+        {
+            Id = Guid.NewGuid(),
+            Name = "X",
+            Description = "d",
+            Price = 1,
+            Category = MenuItemCategory.Pizza,
+            IsVegan = false,
+            PhotoPath = ""
+        };
+
+        await repo.AddItem(item);
+        await repo.DeleteItem(item);
+
+        var found = await repo.GetItemByName("X");
+        Assert.Null(found);
+    }
 }
