@@ -137,7 +137,7 @@ Swagger не подключён, т.к. проект — MVC + Razor. Основ
 - `GET /Orders/Create` — оформление заказа (нужна авторизация)
 - `POST /Orders/Create` — создать заказ (нужна авторизация)
 
-Подробности — в `docs/TECHNICAL.md`.
+Подробности — в `[docs/TECHNICAL.md](https://github.com/msLoginoff/hits-docker-practice-AI/blob/master/csharp-app/docs/TECHNICAL.md#technical-description--mockups)`.
 
 ---
 
