@@ -8,7 +8,7 @@ export const options = {
     },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:5146';
+const BASE_URL = __ENV.BASE_URL || 'http://host.docker.internal:5146';
 const EMAIL = __ENV.EMAIL || 'Java@DlyaLox.ov';
 const PASSWORD = __ENV.PASSWORD || '.NetDlyaPacan0v';
 

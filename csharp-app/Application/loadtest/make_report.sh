@@ -1,48 +1,47 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OUT_DIR="${OUT_DIR:-./out}"
-SCENARIO_FILTER="${SCENARIO_FILTER:-}" # optional
+OUT_ROOT="${OUT_DIR:-./out}"
+SCENARIO="${SCENARIO:-}"
 
-pick_latest() {
-  if [[ -n "$SCENARIO_FILTER" ]]; then
-    ls -t "$OUT_DIR"/summary_"$SCENARIO_FILTER"_*.json 2>/dev/null | head -n 1 || true
-  else
-    ls -t "$OUT_DIR"/summary_*.json 2>/dev/null | head -n 1 || true
-  fi
-}
+if [[ -z "$SCENARIO" ]]; then
+  echo "Usage: SCENARIO=<scenario_name> ./make_report.sh"
+  echo "Example: SCENARIO=03_checkout_flow ./make_report.sh"
+  exit 1
+fi
 
-LATEST_SUMMARY="$(pick_latest)"
+SC_OUT="$OUT_ROOT/$SCENARIO"
+if [[ ! -d "$SC_OUT" ]]; then
+  echo "Scenario folder not found: $SC_OUT"
+  exit 1
+fi
+
+LATEST_SUMMARY="$(ls -t "$SC_OUT"/summary_"$SCENARIO"_*.json 2>/dev/null | head -n 1 || true)"
 if [[ -z "${LATEST_SUMMARY:-}" ]]; then
-  echo "No summary_*.json found in $OUT_DIR"
+  echo "No summary json found in $SC_OUT"
   exit 1
 fi
 
 BASENAME="$(basename "$LATEST_SUMMARY")"
-
-# summary_(SCENARIO)_(YYYYMMDD_HHMMSS).json
 if [[ "$BASENAME" =~ ^summary_(.*)_([0-9]{8}_[0-9]{6})\.json$ ]]; then
-  SCENARIO="${BASH_REMATCH[1]}"
   TS="${BASH_REMATCH[2]}"
 else
   echo "Cannot parse summary filename: $BASENAME"
   exit 1
 fi
 
-ENV_JSON="$OUT_DIR/env_${SCENARIO}_${TS}.json"
+ENV_JSON="$SC_OUT/env_${SCENARIO}_${TS}.json"
 if [[ ! -f "$ENV_JSON" ]]; then
   echo "Env file not found: $ENV_JSON"
-  echo "Existing env files:"
-  ls -1 "$OUT_DIR"/env_*.json 2>/dev/null || true
   exit 1
 fi
 
-REPORT_MD="$OUT_DIR/report_${SCENARIO}_${TS}.md"
-REPORT_HTML="$OUT_DIR/report_${SCENARIO}_${TS}.html"
+REPORT_MD="$SC_OUT/report_${SCENARIO}_${TS}.md"
+REPORT_HTML="$SC_OUT/report_${SCENARIO}_${TS}.html"
 
-echo "Generating report from:"
-echo " - $LATEST_SUMMARY"
-echo " - $ENV_JSON"
+echo "Generating report:"
+echo " - summary: $LATEST_SUMMARY"
+echo " - env:     $ENV_JSON"
 
 python3 "$(dirname "$0")/report.py" \
   --summary "$LATEST_SUMMARY" \

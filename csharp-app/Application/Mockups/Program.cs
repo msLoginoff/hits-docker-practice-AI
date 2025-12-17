@@ -84,7 +84,13 @@ if (!app.Environment.IsDevelopment())
 }
 
 #region Middlewares
-app.UseHttpsRedirection();
+var disableHttpsRedirect =
+    string.Equals(Environment.GetEnvironmentVariable("DISABLE_HTTPS_REDIRECT"), "true", StringComparison.OrdinalIgnoreCase);
+
+if (!disableHttpsRedirect)
+{
+    app.UseHttpsRedirection();
+}
 app.UseStaticFiles();
 
 app.UseRouting();

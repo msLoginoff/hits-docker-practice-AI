@@ -8,7 +8,7 @@ export const options = {
     },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:5146';
+const BASE_URL = __ENV.BASE_URL || 'http://host.docker.internal:5146';
 const USER_COUNT = parseInt(__ENV.USER_COUNT || '10', 10);
 
 function extractToken(html) {
