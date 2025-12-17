@@ -14,9 +14,9 @@ public class EnumHelpersTests
     [Fact]
     public void OrderStatus_Next_Works()
     {
-        Assert.Equal(OrderStatus.InProcess, OrderStatus.New.Next());
-        Assert.Equal(OrderStatus.Ready, OrderStatus.InProcess.Next());
-        Assert.Equal(OrderStatus.Delivered, OrderStatus.Ready.Next());
-        Assert.Null(OrderStatus.Delivered.Next());
+        Assert.Equal(OrderStatus.InProcess, OrderStatus.New.GetNextStatus());
+        Assert.Equal(OrderStatus.Ready, OrderStatus.InProcess.GetNextStatus());
+        Assert.Equal(OrderStatus.Delivered, OrderStatus.Ready.GetNextStatus());
+        Assert.Null(OrderStatus.Delivered.GetNextStatus());
     }
 }
