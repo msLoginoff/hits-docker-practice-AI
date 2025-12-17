@@ -13,6 +13,7 @@ using Mockups.Services.MenuItems;
 using Mockups.Repositories.Orders;
 using Mockups.Services.Orders;
 using Mockups.Services.CartsCleanerService;
+using Mockups.Services.Time;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -45,6 +46,7 @@ builder.Services.AddScoped<IAddressesService, AddressesService>();
 builder.Services.AddScoped<IMenuItemsService, MenuItemsService>();
 builder.Services.AddScoped<ICartsService, CartsService>();
 builder.Services.AddScoped<IOrdersService, OrdersService>();
+builder.Services.AddSingleton<IDateTimeProvider, SystemDateTimeProvider>();
 
 builder.Services.AddScoped<AddressRepository>();
 builder.Services.AddScoped<MenuItemRepository>();
